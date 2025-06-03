@@ -42,12 +42,12 @@ class ConfigurationManager:
         if 'transactions' in self.config:
             self._validate_transaction_settings()
         
-        if 'pattern_injection' in self.config:
-            self._validate_pattern_injection_settings()
+        if 'fraud_patterns' in self.config:
+            self._validate_fraud_patterns()
         
         self._validate_probability_distributions()
         
-        required_sections = {'population', 'transactions', 'pattern_injection'}
+        required_sections = {'population', 'transactions', 'fraud_patterns'}
         missing_sections = required_sections - set(self.config.keys())
         if missing_sections:
             raise ValueError(f"Missing required configuration sections: {missing_sections}")
@@ -70,10 +70,10 @@ class ConfigurationManager:
         """Validate transaction-related settings."""
         trans = self.config['transactions']
         
-        if not trans.get('total_transactions', 0) > 0:
-            raise ValueError("transactions.total_transactions must be greater than 0")
+        if not trans.get('num_transactions', 0) > 0:
+            raise ValueError("transactions.num_transactions must be greater than 0")
         
-        amount = trans.get('amount_range', {})
+        amount = trans.get('amount', {})
         if not (0 < amount.get('min', 0) <= amount.get('max', 0)):
             raise ValueError("Invalid transaction amount range")
         
@@ -92,42 +92,85 @@ class ConfigurationManager:
         if not 0 <= legit_cb.get('rate', 0) <= 1:
             raise ValueError("legitimate_chargebacks.rate must be between 0 and 1")
         
-        # Validate legitimate chargeback reasons probabilities sum to 1
-        reasons = legit_cb.get('reasons', {})
-        if abs(sum(reasons.values()) - 1.0) > 0.001:  # Allow small floating point error
-            raise ValueError("legitimate_chargebacks.reasons probabilities must sum to 1")
-    
-    def _validate_pattern_injection_settings(self) -> None:
-        """Validate pattern injection settings."""
-        pattern = self.config['pattern_injection']
-        
-        # Validate customer ratio
-        if not 0 <= pattern.get('customer_ratio', 0) <= 1:
-            raise ValueError("pattern_injection.customer_ratio must be between 0 and 1")
-        
-        # Validate chargebacks in pattern range
-        cb_in_pattern = pattern.get('chargebacks_in_pattern', {})
-        if not (0 < cb_in_pattern.get('min', 0) <= cb_in_pattern.get('max', 0)):
-            raise ValueError("Invalid chargebacks_in_pattern range")
-        
-        # Validate time window
-        time_window = pattern.get('time_window', {})
-        if not (0 < time_window.get('min', 0) <= time_window.get('max', 0)):
-            raise ValueError("Invalid time_window range")
-        
-        # Validate repeat merchant probability
-        if not 0 <= pattern.get('repeat_merchant_prob', 0) <= 1:
-            raise ValueError("pattern_injection.repeat_merchant_prob must be between 0 and 1")
-        
         # Validate chargeback delay
-        delay = pattern.get('chargeback_delay', {})
+        delay = legit_cb.get('delay', {})
         if not (0 < delay.get('min', 0) <= delay.get('max', 0)):
-            raise ValueError("Invalid chargeback_delay range")
+            raise ValueError("Invalid legitimate_chargebacks.delay range")
+    
+    def _validate_fraud_patterns(self) -> None:
+        """Validate fraud pattern settings."""
+        patterns = self.config['fraud_patterns']
         
-        # Validate pattern reasons probabilities sum to 1
-        reasons = pattern.get('reasons', {})
-        if abs(sum(reasons.values()) - 1.0) > 0.001:  # Allow small floating point error
-            raise ValueError("pattern_injection.reasons probabilities must sum to 1")
+        # Validate total fraud ratio
+        if not 0 <= patterns.get('total_fraud_ratio', 0) <= 1:
+            raise ValueError("fraud_patterns.total_fraud_ratio must be between 0 and 1")
+            
+        # Validate pattern distribution
+        distribution = patterns.get('pattern_distribution', {})
+        total = distribution.get('bin_attack', 0) + distribution.get('serial_chargeback', 0)
+        if abs(total - 1.0) > 1e-8:
+            raise ValueError("Pattern distribution must sum to 1.0 (bin_attack + serial_chargeback)")
+            
+        # Validate BIN Attack settings
+        bin_attack = patterns.get('bin_attack', {})
+        
+        # Validate BIN prefixes
+        bin_prefixes = bin_attack.get('bin_prefixes', [])
+        if not bin_prefixes:
+            raise ValueError("bin_attack.bin_prefixes must not be empty")
+        for bin_prefix in bin_prefixes:
+            if not (isinstance(bin_prefix, str) and len(bin_prefix) == 6 and bin_prefix.isdigit()):
+                raise ValueError("Each BIN prefix must be a 6-digit string")
+        
+        # Validate number of cards range
+        num_cards = bin_attack.get('num_cards', {})
+        if not (0 < num_cards.get('min', 0) <= num_cards.get('max', 0)):
+            raise ValueError("Invalid num_cards range in bin_attack")
+        
+        # Validate transaction amount range
+        amount = bin_attack.get('transaction_amount', {})
+        if not (0 < amount.get('min', 0) <= amount.get('max', 0)):
+            raise ValueError("Invalid transaction_amount range in bin_attack")
+            
+        # Validate time window
+        time_window = bin_attack.get('time_window', {})
+        if not time_window.get('minutes', 0) > 0:
+            raise ValueError("bin_attack.time_window.minutes must be greater than 0")
+        
+        # Validate merchant reuse probability
+        if not 0 <= bin_attack.get('merchant_reuse_prob', 0) <= 1:
+            raise ValueError("bin_attack.merchant_reuse_prob must be between 0 and 1")
+            
+        # Validate chargeback rate
+        if not 0 <= bin_attack.get('chargeback_rate', 0) <= 1:
+            raise ValueError("bin_attack.chargeback_rate must be between 0 and 1")
+            
+        # Validate chargeback delay
+        delay = bin_attack.get('chargeback_delay', {})
+        if not (0 < delay.get('min', 0) <= delay.get('max', 0)):
+            raise ValueError("Invalid chargeback_delay range in bin_attack")
+            
+        # Validate Serial Chargeback settings
+        serial_cb = patterns.get('serial_chargeback', {})
+        
+        # Validate transactions in pattern range
+        txs_in_pattern = serial_cb.get('transactions_in_pattern', {})
+        if not (0 < txs_in_pattern.get('min', 0) <= txs_in_pattern.get('max', 0)):
+            raise ValueError("Invalid transactions_in_pattern range in serial_chargeback")
+            
+        # Validate time window
+        time_window = serial_cb.get('time_window', {})
+        if not (0 < time_window.get('min', 0) <= time_window.get('max', 0)):
+            raise ValueError("Invalid time_window range in serial_chargeback")
+            
+        # Validate merchant reuse probability
+        if not 0 <= serial_cb.get('merchant_reuse_prob', 0) <= 1:
+            raise ValueError("serial_chargeback.merchant_reuse_prob must be between 0 and 1")
+            
+        # Validate chargeback delay
+        delay = serial_cb.get('chargeback_delay', {})
+        if not (0 < delay.get('min', 0) <= delay.get('max', 0)):
+            raise ValueError("Invalid chargeback_delay range in serial_chargeback")
     
     def _validate_probability_distributions(self) -> None:
         """Validate that all probability distributions sum to 1."""

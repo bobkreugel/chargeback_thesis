@@ -4,8 +4,13 @@ import os
 import logging
 import networkx as nx
 import pickle
+import json
+from datetime import datetime
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 def save_graph(graph, filepath):
@@ -14,32 +19,97 @@ def save_graph(graph, filepath):
         pickle.dump(graph, f)
 
 def prepare_graph_for_graphml(graph):
-    """Prepare graph for GraphML export by replacing None values with empty strings."""
+    """Prepare graph for GraphML export by converting non-supported types to strings."""
     graph = graph.copy()
     
-    # Replace None values in node attributes
+    # Replace None values and convert datetime objects in node attributes
     for node, attrs in graph.nodes(data=True):
         for key, value in attrs.items():
             if value is None:
                 attrs[key] = ""
+            elif isinstance(value, datetime):
+                attrs[key] = value.isoformat()
+            elif isinstance(value, type):
+                attrs[key] = value.__name__
     
-    # Replace None values in edge attributes
+    # Replace None values and convert datetime objects in edge attributes
     for u, v, attrs in graph.edges(data=True):
         for key, value in attrs.items():
             if value is None:
                 attrs[key] = ""
+            elif isinstance(value, datetime):
+                attrs[key] = value.isoformat()
+            elif isinstance(value, type):
+                attrs[key] = value.__name__
     
     return graph
 
+def calculate_statistics(graph):
+    """Calculate statistics about the generated dataset."""
+    stats = {
+        'total_nodes': graph.number_of_nodes(),
+        'total_edges': graph.number_of_edges(),
+        'node_types': {},
+        'transactions': {
+            'total': 0,
+            'normal': 0,
+            'legitimate_chargebacks': 0,
+            'fraudulent': 0,
+            'bin_attacks': 0,
+            'serial_chargebacks': 0
+        }
+    }
+    
+    # Count node types
+    for node, attr in graph.nodes(data=True):
+        node_type = attr.get('node_type', 'unknown')
+        stats['node_types'][node_type] = stats['node_types'].get(node_type, 0) + 1
+        
+        # Count transaction types
+        if node_type == 'transaction':
+            stats['transactions']['total'] += 1
+            
+            # Get customer who made the transaction
+            card_edges = [e for e in graph.in_edges(node, data=True) if e[2].get('edge_type') == 'card_to_transaction']
+            if card_edges:
+                card_id = card_edges[0][0]
+                customer_edges = [e for e in graph.in_edges(card_id, data=True) if e[2].get('edge_type') == 'customer_to_card']
+                if customer_edges:
+                    customer_id = customer_edges[0][0]
+                    customer_attr = graph.nodes[customer_id]
+                    
+                    if attr.get('is_chargeback', False):
+                        if customer_attr.get('is_fraudster', False):
+                            stats['transactions']['fraudulent'] += 1
+                            
+                            # Check transaction amount to determine if it's a BIN attack
+                            if attr.get('amount', 0) <= 5.00:  # BIN attacks use small amounts
+                                stats['transactions']['bin_attacks'] += 1
+                            else:
+                                stats['transactions']['serial_chargebacks'] += 1
+                        else:
+                            stats['transactions']['legitimate_chargebacks'] += 1
+                    else:
+                        if not customer_attr.get('is_fraudster', False):
+                            stats['transactions']['normal'] += 1
+                        # Note: non-chargeback transactions from fraudsters are counted in total but not in any specific category
+    
+    return stats
+
 def main():
-    # Create output directory
-    output_dir = "output"
+    # Use fixed output directory
+    output_dir = "output/dataset"
     os.makedirs(output_dir, exist_ok=True)
     
     # Initialize configuration (uses default config if no path provided)
     config_manager = ConfigurationManager()
     
-    # Initialize transaction engine
+    # Save configuration used
+    config_file = os.path.join(output_dir, "config.json")
+    with open(config_file, 'w') as f:
+        json.dump(config_manager.get_config(), f, indent=2)
+    
+    # Initialize transaction engine with no fixed seed for random data each time
     engine = TransactionEngine(config_manager)
     
     # Generate base population
@@ -50,20 +120,52 @@ def main():
     logger.info("Generating transactions...")
     engine.generate_normal_transactions()
     
+    # Inject fraud patterns
+    logger.info("Injecting fraud patterns...")
+    engine._inject_patterns()
+    
+    # Get the complete graph
+    graph = engine.get_graph()
+    
+    # Calculate and save statistics
+    logger.info("Calculating dataset statistics...")
+    stats = calculate_statistics(graph)
+    stats_file = os.path.join(output_dir, "statistics.json")
+    with open(stats_file, 'w') as f:
+        json.dump(stats, f, indent=2)
+    
+    # Log key statistics
+    logger.info("\nDataset Statistics:")
+    logger.info(f"Total Transactions: {stats['transactions']['total']}")
+    logger.info(f"Normal Transactions: {stats['transactions']['normal']}")
+    logger.info(f"Legitimate Chargebacks: {stats['transactions']['legitimate_chargebacks']}")
+    logger.info("\nFraud Statistics:")
+    logger.info(f"Total Fraudulent: {stats['transactions']['fraudulent']}")
+    logger.info(f"BIN Attacks: {stats['transactions']['bin_attacks']} ({stats['transactions']['bin_attacks']/stats['transactions']['fraudulent']*100:.1f}%)")
+    logger.info(f"Serial Chargebacks: {stats['transactions']['serial_chargebacks']} ({stats['transactions']['serial_chargebacks']/stats['transactions']['fraudulent']*100:.1f}%)")
+    
     # Export to CSV
-    logger.info("Exporting data to CSV...")
+    logger.info("\nExporting data to CSV...")
     engine.export_to_csv(output_dir)
     
     # Export graph formats
     logger.info("Exporting graph formats...")
-    graph = engine.get_graph()
     save_graph(graph, os.path.join(output_dir, "transaction_graph.gpickle"))
     
     # Prepare and save GraphML
     graphml_graph = prepare_graph_for_graphml(graph)
     nx.write_graphml(graphml_graph, os.path.join(output_dir, "transaction_graph.graphml"))
     
-    logger.info(f"Data generation complete. Files saved in {output_dir}/")
+    logger.info(f"\nData generation complete. Files saved in {output_dir}/")
+    logger.info("Generated files:")
+    logger.info("- transaction_graph.gpickle (Complete graph with all attributes)")
+    logger.info("- transaction_graph.graphml (Graph in GraphML format)")
+    logger.info("- transactions.csv (All transactions)")
+    logger.info("- customers.csv (Customer information)")
+    logger.info("- merchants.csv (Merchant information)")
+    logger.info("- cards.csv (Card information)")
+    logger.info("- config.json (Configuration used)")
+    logger.info("- statistics.json (Dataset statistics)")
 
 if __name__ == "__main__":
     main() 

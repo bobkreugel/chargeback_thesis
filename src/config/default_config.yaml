@@ -4,44 +4,68 @@ population:
   num_merchants: 500
   cards_per_customer:
     min: 1
-    max: 4
+    max: 3
 
 # Transaction settings
 transactions:
-  total_transactions: 100000
-  amount_range:
-    min: 50.00
-    max: 100.00
+  num_transactions: 100000
+  amount:
+    min: 1.00
+    max: 1000.00
   date_range:
-    start: '2023-01-01'
-    end: '2024-01-01'
-  # Legitimate chargeback settings
+    start: '2024-01-01'
+    end: '2025-01-01'
   legitimate_chargebacks:
-    rate: 0.02  # 2% legitimate chargeback rate
-    reasons:
-      product_not_received: 0.30
-      product_defective: 0.25
-      duplicate_charge: 0.15
-      incorrect_amount: 0.20
-      service_not_provided: 0.10
+    rate: 0.02
+    delay:
+      min: 1
+      max: 30
+
+# Fraud Pattern Settings
+fraud_patterns:
+  total_fraud_ratio: 0.15
+  pattern_distribution:
+    bin_attack: 0.4
+    serial_chargeback: 0.6
+
+  # BIN Attack Pattern settings
+  bin_attack:
+    # BIN prefixes to use (first 6 digits of card numbers)
+    bin_prefixes: 
+      - "123456"
+      - "789012"
+    # Number of cards to test per attack
+    num_cards:
+      min: 10
+      max: 30
+    # Small transaction amounts for testing
+    transaction_amount:
+      min: 1.00
+      max: 5.00
+    # Time window for each attack
+    time_window:
+      minutes: 60
+    # Probability of reusing the same merchant for multiple transactions
+    merchant_reuse_prob: 0.7
+    # Percentage of BIN attack transactions that lead to chargebacks
+    chargeback_rate: 0.8
     chargeback_delay:
       min: 1
-      max: 60
+      max: 7
 
-# Serial Chargeback Pattern Injection settings
-pattern_injection:
-  customer_ratio: 0.001
-  chargebacks_in_pattern:
-    min: 5
-    max: 8
-  time_window:
-    min: 7   # days
-    max: 30  # days
-  repeat_merchant_prob: 0.4  # 40% chance to use same merchant
-  chargeback_delay:
-    min: 3   # days
-    max: 14  # days
-  reasons:
-    product_not_received: 0.60
-    service_not_provided: 0.25
-    product_defective: 0.15 
+  # Serial Chargeback Pattern settings
+  serial_chargeback:
+    # Number of transactions in a pattern
+    transactions_in_pattern:
+      min: 5
+      max: 15
+    # Time window for the pattern
+    time_window:
+      min: 1
+      max: 14
+    # Probability of reusing the same merchant
+    merchant_reuse_prob: 0.3
+    # Delay before chargeback
+    chargeback_delay:
+      min: 1
+      max: 30 
