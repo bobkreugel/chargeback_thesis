@@ -122,13 +122,24 @@ class TransactionEngine:
         chargeback_id = str(uuid.uuid4())
         chargeback_timestamp = transaction['timestamp'] + timedelta(days=delay_days)
         
+        # Define possible chargeback reasons
+        chargeback_reasons = [
+            "Fraudulent Transaction",
+            "Product Not Received",
+            "Product Not as Described",
+            "Duplicate Transaction",
+            "Technical Error"
+        ]
+        
         self.graph.add_node(
             chargeback_id,
             node_type='transaction',
             amount=transaction['amount'],
             timestamp=chargeback_timestamp,
             is_chargeback=True,
-            original_transaction=transaction_id
+            original_transaction=transaction_id,
+            chargeback_date=chargeback_timestamp,
+            chargeback_reason=random.choice(chargeback_reasons)
         )
         
         # Add edges (same as original transaction)
@@ -211,6 +222,11 @@ class TransactionEngine:
         while transactions_generated < normal_transactions:
             # Select random customer and their card
             customer_id = random.choice(list(self.customers))
+            
+            # Skip fraudulent customers
+            if self.graph.nodes[customer_id].get('is_fraudster', False):
+                continue
+                
             card_id = random.choice(list(self.customer_cards[customer_id]))
             
             # Select random merchant
@@ -279,28 +295,67 @@ class TransactionEngine:
         
         logger.info(f"Target fraudulent transactions: {target_fraud}")
         
-        # Calculate number of each pattern type
+        # Calculate target transactions for each pattern type
         pattern_dist = fraud_config['pattern_distribution']
         target_serial_cb = int(target_fraud * pattern_dist['serial_chargeback'])
         target_bin_attacks = int(target_fraud * pattern_dist['bin_attack'])
         
         # Calculate average transactions per pattern
-        bin_config = fraud_config['bin_attack']
-        avg_cards_per_bin = (bin_config['num_cards']['min'] + bin_config['num_cards']['max']) / 2
-        avg_txs_per_bin = avg_cards_per_bin * (1 + bin_config['chargeback_rate'])  # Original + chargebacks
-        
         serial_config = fraud_config['serial_chargeback']
         avg_txs_per_serial = (
-            (serial_config['transactions_in_pattern']['min'] + serial_config['transactions_in_pattern']['max']) / 2
-        ) * 2  # Each transaction gets a chargeback
+            serial_config['transactions_in_pattern']['min'] + 
+            serial_config['transactions_in_pattern']['max']
+        ) / 2
         
-        # Calculate number of patterns needed
-        num_serial_cb = int(target_serial_cb / avg_txs_per_serial)
-        num_bin_attacks = int(target_bin_attacks / avg_txs_per_bin)
+        # For serial chargebacks, each transaction gets a chargeback
+        total_txs_per_serial = avg_txs_per_serial * 2  # Original + chargeback
+        
+        bin_config = fraud_config['bin_attack']
+        avg_cards_per_bin = (
+            bin_config['num_cards']['min'] + 
+            bin_config['num_cards']['max']
+        ) / 2
+        
+        # For BIN attacks:
+        # - Each card gets one transaction
+        # - Some percentage of transactions get chargebacks based on chargeback_rate
+        # - Some transactions may fail (no chargeback)
+        avg_success_rate = 0.8  # Assume 80% of transactions succeed
+        total_txs_per_bin = avg_cards_per_bin * (1 + (bin_config['chargeback_rate'] * avg_success_rate))
+        
+        # Calculate number of patterns needed to achieve target transaction counts
+        num_serial_cb = int(round(target_serial_cb / total_txs_per_serial))
+        num_bin_attacks = int(round(target_bin_attacks / total_txs_per_bin))
+        
+        # Verify and adjust pattern counts if needed to get closer to target ratio
+        expected_serial_txs = num_serial_cb * total_txs_per_serial
+        expected_bin_txs = num_bin_attacks * total_txs_per_bin
+        expected_total = expected_serial_txs + expected_bin_txs
+        expected_serial_ratio = expected_serial_txs / expected_total
+        
+        # If ratio is off by more than 2%, adjust pattern counts
+        if abs(expected_serial_ratio - pattern_dist['serial_chargeback']) > 0.02:
+            # Calculate ideal number of patterns based on ratio
+            total_patterns = max(num_serial_cb / pattern_dist['serial_chargeback'],
+                               num_bin_attacks / pattern_dist['bin_attack'])
+            num_serial_cb = int(round(total_patterns * pattern_dist['serial_chargeback']))
+            num_bin_attacks = int(round(total_patterns * pattern_dist['bin_attack']))
         
         logger.info(f"Generating patterns:")
-        logger.info(f"- Serial chargebacks: {num_serial_cb} patterns (avg {avg_txs_per_serial:.1f} txs/pattern)")
-        logger.info(f"- BIN attacks: {num_bin_attacks} patterns (avg {avg_txs_per_bin:.1f} txs/pattern)")
+        logger.info(f"- Serial chargebacks: {num_serial_cb} patterns")
+        logger.info(f"  * {avg_txs_per_serial:.1f} original txs/pattern")
+        logger.info(f"  * {total_txs_per_serial:.1f} total txs/pattern (with chargebacks)")
+        logger.info(f"- BIN attacks: {num_bin_attacks} patterns")
+        logger.info(f"  * {avg_cards_per_bin:.1f} cards/pattern")
+        logger.info(f"  * {total_txs_per_bin:.1f} total txs/pattern (with chargebacks)")
+        
+        # Calculate expected transaction distribution
+        expected_serial_txs = num_serial_cb * total_txs_per_serial
+        expected_bin_txs = num_bin_attacks * total_txs_per_bin
+        expected_total = expected_serial_txs + expected_bin_txs
+        logger.info(f"\nExpected transaction distribution:")
+        logger.info(f"- Serial chargebacks: {expected_serial_txs:.0f} ({expected_serial_txs/expected_total*100:.1f}%)")
+        logger.info(f"- BIN attacks: {expected_bin_txs:.0f} ({expected_bin_txs/expected_total*100:.1f}%)")
         
         # Initialize pattern generators with same seed if one was provided
         serial_cb_pattern = SerialChargebackPattern(fraud_config['serial_chargeback'], seed=self.seed)

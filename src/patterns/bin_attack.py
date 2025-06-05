@@ -1,56 +1,15 @@
 from datetime import datetime, timedelta
 import random
 import uuid
-from typing import Dict, Any, List, Tuple, Set
+from typing import Dict, Any, List, Set
 import networkx as nx
-from faker import Faker
-from .base_pattern import BasePattern
 import logging
-import ipaddress
+from .base_pattern import BasePattern
 
 logger = logging.getLogger(__name__)
 
-class BINAttackPattern:
+class BINAttackPattern(BasePattern):
     """Pattern generator for BIN attacks (testing multiple cards with same BIN prefix)."""
-    
-    def __init__(self, config, seed: int = None):
-        """Initialize the BIN attack pattern generator."""
-        self.config = config
-        self.fake = Faker()
-        if seed is not None:
-            Faker.seed(seed)
-            random.seed(seed)
-    
-    def _generate_fraudster_data(self) -> Dict[str, Any]:
-        """Generate data for a fraudulent customer."""
-        return {
-            'name': self.fake.name(),
-            'email': self.fake.email(),
-            'phone': self.fake.phone_number(),
-            'address': self.fake.address().replace('\n', ', '),
-            'city': self.fake.city(),
-            'state': self.fake.state(),
-            'zip': self.fake.zipcode(),
-            'risk_score': round(random.uniform(60, 100), 2),  # Higher risk score for fraudsters
-            'is_fraudster': True
-        }
-    
-    def _generate_ip_address(self) -> str:
-        """Generate a random IP address that looks realistic."""
-        # Generate a random IP in these ranges:
-        # 5.0.0.0 to 95.255.255.255 (European/Asian ISPs)
-        # 104.0.0.0 to 191.255.255.255 (North American ISPs)
-        # Avoid private ranges and other special purpose IPs
-        
-        ranges = [
-            (int(ipaddress.IPv4Address('5.0.0.0')), int(ipaddress.IPv4Address('95.255.255.255'))),
-            (int(ipaddress.IPv4Address('104.0.0.0')), int(ipaddress.IPv4Address('191.255.255.255')))
-        ]
-        
-        range_idx = random.randint(0, 1)
-        start, end = ranges[range_idx]
-        ip_int = random.randint(start, end)
-        return str(ipaddress.IPv4Address(ip_int))
     
     def inject(
         self,
@@ -92,6 +51,7 @@ class BINAttackPattern:
             graph.add_node(
                 customer_id,
                 node_type='customer',
+                fraud_type='bin_attack',
                 **customer_data
             )
             
@@ -115,6 +75,8 @@ class BINAttackPattern:
             
             # Generate fraudulent cards with same BIN
             bin_prefix = random.choice(self.config['bin_prefixes'])
+            
+            # Calculate number of cards based on config
             num_cards = random.randint(
                 self.config['num_cards']['min'],
                 self.config['num_cards']['max']
