@@ -11,6 +11,7 @@ import time
 from src.config.config_manager import ConfigurationManager
 from src.patterns.serial_chargeback import SerialChargebackPattern
 from src.patterns.bin_attack import BINAttackPattern
+from src.patterns.friendly_fraud import FriendlyFraudPattern
 from collections import defaultdict
 import sys
 import csv
@@ -299,67 +300,12 @@ class TransactionEngine:
         pattern_dist = fraud_config['pattern_distribution']
         target_serial_cb = int(target_fraud * pattern_dist['serial_chargeback'])
         target_bin_attacks = int(target_fraud * pattern_dist['bin_attack'])
-        
-        # Calculate average transactions per pattern
-        serial_config = fraud_config['serial_chargeback']
-        avg_txs_per_serial = (
-            serial_config['transactions_in_pattern']['min'] + 
-            serial_config['transactions_in_pattern']['max']
-        ) / 2
-        
-        # For serial chargebacks, each transaction gets a chargeback
-        total_txs_per_serial = avg_txs_per_serial * 2  # Original + chargeback
-        
-        bin_config = fraud_config['bin_attack']
-        avg_cards_per_bin = (
-            bin_config['num_cards']['min'] + 
-            bin_config['num_cards']['max']
-        ) / 2
-        
-        # For BIN attacks:
-        # - Each card gets one transaction
-        # - Some percentage of transactions get chargebacks based on chargeback_rate
-        # - Some transactions may fail (no chargeback)
-        avg_success_rate = 0.8  # Assume 80% of transactions succeed
-        total_txs_per_bin = avg_cards_per_bin * (1 + (bin_config['chargeback_rate'] * avg_success_rate))
-        
-        # Calculate number of patterns needed to achieve target transaction counts
-        num_serial_cb = int(round(target_serial_cb / total_txs_per_serial))
-        num_bin_attacks = int(round(target_bin_attacks / total_txs_per_bin))
-        
-        # Verify and adjust pattern counts if needed to get closer to target ratio
-        expected_serial_txs = num_serial_cb * total_txs_per_serial
-        expected_bin_txs = num_bin_attacks * total_txs_per_bin
-        expected_total = expected_serial_txs + expected_bin_txs
-        expected_serial_ratio = expected_serial_txs / expected_total
-        
-        # If ratio is off by more than 2%, adjust pattern counts
-        if abs(expected_serial_ratio - pattern_dist['serial_chargeback']) > 0.02:
-            # Calculate ideal number of patterns based on ratio
-            total_patterns = max(num_serial_cb / pattern_dist['serial_chargeback'],
-                               num_bin_attacks / pattern_dist['bin_attack'])
-            num_serial_cb = int(round(total_patterns * pattern_dist['serial_chargeback']))
-            num_bin_attacks = int(round(total_patterns * pattern_dist['bin_attack']))
-        
-        logger.info(f"Generating patterns:")
-        logger.info(f"- Serial chargebacks: {num_serial_cb} patterns")
-        logger.info(f"  * {avg_txs_per_serial:.1f} original txs/pattern")
-        logger.info(f"  * {total_txs_per_serial:.1f} total txs/pattern (with chargebacks)")
-        logger.info(f"- BIN attacks: {num_bin_attacks} patterns")
-        logger.info(f"  * {avg_cards_per_bin:.1f} cards/pattern")
-        logger.info(f"  * {total_txs_per_bin:.1f} total txs/pattern (with chargebacks)")
-        
-        # Calculate expected transaction distribution
-        expected_serial_txs = num_serial_cb * total_txs_per_serial
-        expected_bin_txs = num_bin_attacks * total_txs_per_bin
-        expected_total = expected_serial_txs + expected_bin_txs
-        logger.info(f"\nExpected transaction distribution:")
-        logger.info(f"- Serial chargebacks: {expected_serial_txs:.0f} ({expected_serial_txs/expected_total*100:.1f}%)")
-        logger.info(f"- BIN attacks: {expected_bin_txs:.0f} ({expected_bin_txs/expected_total*100:.1f}%)")
+        target_friendly_fraud = int(target_fraud * pattern_dist['friendly_fraud'])
         
         # Initialize pattern generators with same seed if one was provided
         serial_cb_pattern = SerialChargebackPattern(fraud_config['serial_chargeback'], seed=self.seed)
         bin_attack_pattern = BINAttackPattern(fraud_config['bin_attack'], seed=self.seed)
+        friendly_fraud_pattern = FriendlyFraudPattern(fraud_config['friendly_fraud'], seed=self.seed)
         
         # Get date range from config
         trans_config = self.config.get_section('transactions')
@@ -367,35 +313,109 @@ class TransactionEngine:
         start_date = datetime.strptime(date_range['start'], '%Y-%m-%d')
         end_date = datetime.strptime(date_range['end'], '%Y-%m-%d')
         
-        # Inject serial chargeback patterns
-        logger.info(f"Generating {num_serial_cb} serial chargeback patterns")
-        self.graph = serial_cb_pattern.inject(
-            self.graph,
-            num_serial_cb,
-            start_date,
-            end_date,
-            self.customers,
-            self.customer_cards,
-            self.merchants
-        )
+        def count_pattern_transactions(pattern_type: str) -> int:
+            """Count actual transactions for a specific pattern type."""
+            count = 0
+            for node, attr in self.graph.nodes(data=True):
+                if (attr.get('node_type') == 'transaction' and 
+                    not attr.get('is_chargeback', False) and  # Only count original transactions
+                    attr.get('customer_id')):
+                    customer = self.graph.nodes[attr['customer_id']]
+                    if customer.get('fraud_type') == pattern_type:
+                        count += 1
+            return count
         
-        # Update internal mappings after serial chargebacks
-        self._refresh_internal_mappings()
+        # Adaptive pattern generation with continuous monitoring
+        def generate_patterns(pattern_obj, pattern_type: str, target_txs: int, max_attempts: int = 10) -> int:
+            """Generate patterns and return actual number of transactions created."""
+            actual_txs = count_pattern_transactions(pattern_type)
+            attempt = 0
+            
+            while actual_txs < target_txs and attempt < max_attempts:
+                # Calculate remaining transactions needed
+                remaining = target_txs - actual_txs
+                
+                # Initial estimate based on config
+                if pattern_type == 'serial_chargeback':
+                    avg_txs = (fraud_config['serial_chargeback']['transactions_in_pattern']['min'] +
+                              fraud_config['serial_chargeback']['transactions_in_pattern']['max']) / 2
+                elif pattern_type == 'bin_attack':
+                    avg_txs = (fraud_config['bin_attack']['num_cards']['min'] +
+                              fraud_config['bin_attack']['num_cards']['max']) / 2
+                else:  # friendly_fraud
+                    avg_txs = (fraud_config['friendly_fraud']['fraudulent_transactions']['min'] +
+                              fraud_config['friendly_fraud']['fraudulent_transactions']['max']) / 2
+                
+                # Calculate number of patterns needed
+                current_patterns = sum(1 for n, a in self.graph.nodes(data=True) 
+                                     if a.get('fraud_type') == pattern_type)
+                
+                if current_patterns > 0 and actual_txs > 0:
+                    # Use actual average if we have data
+                    avg_txs_per_pattern = actual_txs / current_patterns
+                    # Adjust based on how close we are to target
+                    if actual_txs > target_txs * 0.8:  # If we're close, be more conservative
+                        num_patterns = max(1, int(remaining / avg_txs_per_pattern))
+                    else:
+                        num_patterns = max(1, int(remaining / avg_txs_per_pattern * 1.1))  # Add 10% buffer
+                else:
+                    # Use config-based estimate for initial patterns
+                    # Start with a smaller batch to gauge actual transactions per pattern
+                    num_patterns = max(1, int(remaining / avg_txs * 0.5))  # Start with 50% of estimated
+                
+                # Generate patterns
+                self.graph = pattern_obj.inject(
+                    self.graph,
+                    num_patterns,
+                    start_date,
+                    end_date,
+                    self.customers,
+                    self.customer_cards,
+                    self.merchants
+                )
+                
+                # Update internal mappings
+                self._refresh_internal_mappings()
+                
+                # Count actual transactions
+                new_actual_txs = count_pattern_transactions(pattern_type)
+                
+                # Check progress
+                if new_actual_txs <= actual_txs:  # No improvement
+                    attempt += 1
+                
+                actual_txs = new_actual_txs
+                logger.info(f"{pattern_type}: Generated {actual_txs} transactions (target: {target_txs})")
+                
+                # Calculate current distribution
+                total_current = (count_pattern_transactions('serial_chargeback') +
+                               count_pattern_transactions('bin_attack') +
+                               count_pattern_transactions('friendly_fraud'))
+                
+                if total_current > 0:
+                    current_dist = actual_txs / total_current
+                    target_dist = target_txs / target_fraud
+                    logger.info(f"{pattern_type} distribution: {current_dist:.1%} (target: {target_dist:.1%})")
+                
+                # Stop if we're within 5% of target
+                if actual_txs >= target_txs * 0.95 and actual_txs <= target_txs * 1.05:
+                    break
+            
+            return actual_txs
         
-        # Inject BIN attack patterns
-        logger.info(f"Generating {num_bin_attacks} BIN attack patterns")
-        self.graph = bin_attack_pattern.inject(
-            self.graph,
-            num_bin_attacks,
-            start_date,
-            end_date,
-            self.customers,
-            self.customer_cards,
-            self.merchants
-        )
+        # Generate patterns in sequence to maintain distribution
+        logger.info("Generating patterns to match target distribution...")
         
-        # Update internal mappings after BIN attacks
-        self._refresh_internal_mappings()
+        actual_serial = generate_patterns(serial_cb_pattern, 'serial_chargeback', target_serial_cb)
+        actual_bin = generate_patterns(bin_attack_pattern, 'bin_attack', target_bin_attacks)
+        actual_friendly = generate_patterns(friendly_fraud_pattern, 'friendly_fraud', target_friendly_fraud)
+        
+        # Log final distribution
+        total_fraud_txs = actual_serial + actual_bin + actual_friendly
+        logger.info("\nFinal fraud transaction distribution:")
+        logger.info(f"- Serial chargebacks: {actual_serial} ({actual_serial/total_fraud_txs*100:.1f}%)")
+        logger.info(f"- BIN attacks: {actual_bin} ({actual_bin/total_fraud_txs*100:.1f}%)")
+        logger.info(f"- Friendly fraud: {actual_friendly} ({actual_friendly/total_fraud_txs*100:.1f}%)")
         
         logger.info("Completed fraud pattern injection")
     

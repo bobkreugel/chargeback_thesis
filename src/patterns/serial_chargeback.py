@@ -188,7 +188,8 @@ class SerialChargebackPattern(BasePattern):
                     timestamp=timestamp,
                     amount=amount,
                     is_fraudulent=True,
-                    is_chargeback=False
+                    is_chargeback=False,
+                    customer_id=customer_id
                 )
                 
                 # Add edges
@@ -209,7 +210,8 @@ class SerialChargebackPattern(BasePattern):
                     is_fraudulent=True,
                     is_chargeback=True,
                     original_transaction=tx_id,
-                    chargeback_reason="Fraudulent Transaction"
+                    chargeback_reason="Fraudulent Transaction",
+                    customer_id=customer_id
                 )
                 
                 # Add edges (same as original transaction)
@@ -232,7 +234,8 @@ class SerialChargebackPattern(BasePattern):
                     timestamp=timestamp,
                     amount=amount,
                     is_fraudulent=False,
-                    is_chargeback=False
+                    is_chargeback=False,
+                    customer_id=customer_id
                 )
                 
                 # Add edges

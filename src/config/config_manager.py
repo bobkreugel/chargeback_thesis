@@ -107,9 +107,13 @@ class ConfigurationManager:
             
         # Validate pattern distribution
         distribution = patterns.get('pattern_distribution', {})
-        total = distribution.get('bin_attack', 0) + distribution.get('serial_chargeback', 0)
+        total = (
+            distribution.get('bin_attack', 0) + 
+            distribution.get('serial_chargeback', 0) + 
+            distribution.get('friendly_fraud', 0)
+        )
         if abs(total - 1.0) > 1e-8:
-            raise ValueError("Pattern distribution must sum to 1.0 (bin_attack + serial_chargeback)")
+            raise ValueError("Pattern distribution must sum to 1.0 (bin_attack + serial_chargeback + friendly_fraud)")
             
         # Validate BIN Attack settings
         bin_attack = patterns.get('bin_attack', {})
@@ -171,6 +175,47 @@ class ConfigurationManager:
         delay = serial_cb.get('chargeback_delay', {})
         if not (0 < delay.get('min', 0) <= delay.get('max', 0)):
             raise ValueError("Invalid chargeback_delay range in serial_chargeback")
+            
+        # Validate Friendly Fraud settings
+        friendly_fraud = patterns.get('friendly_fraud', {})
+        
+        # Validate legitimate period range
+        legitimate_period = friendly_fraud.get('legitimate_period', {})
+        if not (0 < legitimate_period.get('min', 0) <= legitimate_period.get('max', 0)):
+            raise ValueError("Invalid legitimate_period range in friendly_fraud")
+            
+        # Validate initial legitimate transactions range
+        initial_txs = friendly_fraud.get('initial_legitimate_transactions', {})
+        if not (0 < initial_txs.get('min', 0) <= initial_txs.get('max', 0)):
+            raise ValueError("Invalid initial_legitimate_transactions range in friendly_fraud")
+            
+        # Validate fraudulent transactions range
+        fraud_txs = friendly_fraud.get('fraudulent_transactions', {})
+        if not (0 < fraud_txs.get('min', 0) <= fraud_txs.get('max', 0)):
+            raise ValueError("Invalid fraudulent_transactions range in friendly_fraud")
+            
+        # Validate time between transactions range
+        time_between = friendly_fraud.get('time_between_transactions', {})
+        if not (0 < time_between.get('min', 0) <= time_between.get('max', 0)):
+            raise ValueError("Invalid time_between_transactions range in friendly_fraud")
+            
+        # Validate transaction amount range
+        amount = friendly_fraud.get('transaction_amount', {})
+        if not (0 < amount.get('min', 0) <= amount.get('max', 0)):
+            raise ValueError("Invalid transaction_amount range in friendly_fraud")
+            
+        # Validate chargeback delay range
+        delay = friendly_fraud.get('chargeback_delay', {})
+        if not (0 < delay.get('min', 0) <= delay.get('max', 0)):
+            raise ValueError("Invalid chargeback_delay range in friendly_fraud")
+            
+        # Validate chargeback probability
+        if not 0 <= friendly_fraud.get('chargeback_probability', 0) <= 1:
+            raise ValueError("friendly_fraud.chargeback_probability must be between 0 and 1")
+            
+        # Validate merchant reuse probability
+        if not 0 <= friendly_fraud.get('merchant_reuse_prob', 0) <= 1:
+            raise ValueError("friendly_fraud.merchant_reuse_prob must be between 0 and 1")
     
     def _validate_probability_distributions(self) -> None:
         """Validate that all probability distributions sum to 1."""

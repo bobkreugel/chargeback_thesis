@@ -56,7 +56,8 @@ def calculate_statistics(graph):
             'legitimate_chargebacks': 0,
             'fraudulent': 0,
             'bin_attacks': 0,
-            'serial_chargebacks': 0
+            'serial_chargebacks': 0,
+            'friendly_fraud': 0
         }
     }
     
@@ -69,6 +70,12 @@ def calculate_statistics(graph):
         if node_type == 'transaction':
             stats['transactions']['total'] += 1
             
+            # Skip chargeback transactions for fraud pattern counting
+            if attr.get('is_chargeback', False):
+                if not attr.get('is_fraudulent', False):
+                    stats['transactions']['legitimate_chargebacks'] += 1
+                continue
+                
             # Get customer who made the transaction
             card_edges = [e for e in graph.in_edges(node, data=True) if e[2].get('edge_type') == 'card_to_transaction']
             if card_edges:
@@ -78,21 +85,19 @@ def calculate_statistics(graph):
                     customer_id = customer_edges[0][0]
                     customer_attr = graph.nodes[customer_id]
                     
-                    if attr.get('is_chargeback', False):
-                        if customer_attr.get('is_fraudster', False):
-                            stats['transactions']['fraudulent'] += 1
-                            
-                            # Check transaction amount to determine if it's a BIN attack
-                            if attr.get('amount', 0) <= 5.00:  # BIN attacks use small amounts
-                                stats['transactions']['bin_attacks'] += 1
-                            else:
-                                stats['transactions']['serial_chargebacks'] += 1
-                        else:
-                            stats['transactions']['legitimate_chargebacks'] += 1
+                    if customer_attr.get('is_fraudster', False):
+                        stats['transactions']['fraudulent'] += 1
+                        
+                        # Check fraud type
+                        fraud_type = customer_attr.get('fraud_type')
+                        if fraud_type == 'bin_attack':
+                            stats['transactions']['bin_attacks'] += 1
+                        elif fraud_type == 'serial_chargeback':
+                            stats['transactions']['serial_chargebacks'] += 1
+                        elif fraud_type == 'friendly_fraud':
+                            stats['transactions']['friendly_fraud'] += 1
                     else:
-                        if not customer_attr.get('is_fraudster', False):
-                            stats['transactions']['normal'] += 1
-                        # Note: non-chargeback transactions from fraudsters are counted in total but not in any specific category
+                        stats['transactions']['normal'] += 1
     
     return stats
 
@@ -143,6 +148,7 @@ def main():
     logger.info(f"Total Fraudulent: {stats['transactions']['fraudulent']}")
     logger.info(f"BIN Attacks: {stats['transactions']['bin_attacks']} ({stats['transactions']['bin_attacks']/stats['transactions']['fraudulent']*100:.1f}%)")
     logger.info(f"Serial Chargebacks: {stats['transactions']['serial_chargebacks']} ({stats['transactions']['serial_chargebacks']/stats['transactions']['fraudulent']*100:.1f}%)")
+    logger.info(f"Friendly Fraud: {stats['transactions']['friendly_fraud']} ({stats['transactions']['friendly_fraud']/stats['transactions']['fraudulent']*100:.1f}%)")
     
     # Export to CSV
     logger.info("\nExporting data to CSV...")

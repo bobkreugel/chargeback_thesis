@@ -23,10 +23,11 @@ transactions:
 
 # Fraud Pattern Settings
 fraud_patterns:
-  total_fraud_ratio: 0.15
+  total_fraud_ratio: 0.1
   pattern_distribution:
-    serial_chargeback: 0.6
+    serial_chargeback: 0.4
     bin_attack: 0.4
+    friendly_fraud: 0.2
 
   # Serial Chargeback Pattern settings
   serial_chargeback:
@@ -44,6 +45,37 @@ fraud_patterns:
     chargeback_delay:
       min: 10
       max: 30
+
+  # Friendly Fraud Pattern settings
+  friendly_fraud:
+    # Initial legitimate period (in days)
+    legitimate_period:
+      min: 30
+      max: 40
+    # Number of transactions before starting chargebacks
+    initial_legitimate_transactions:
+      min: 3
+      max: 5
+    # Number of fraudulent transactions after legitimate period
+    fraudulent_transactions:
+      min: 4
+      max: 8
+    # Time between transactions (in days)
+    time_between_transactions:
+      min: 10
+      max: 20
+    # Transaction amounts should be within normal range
+    transaction_amount:
+      min: 40.00
+      max: 75.00
+    # Delay between transaction and chargeback (in days)
+    chargeback_delay:
+      min: 50
+      max: 80
+    # Probability of a transaction becoming a chargeback after legitimate period
+    chargeback_probability: 0.7
+    # Merchant reuse probability (should be low to spread across merchants)
+    merchant_reuse_prob: 0.1
 
   # BIN Attack Pattern settings
   bin_attack:

@@ -48,7 +48,7 @@ def analyze_card_patterns(graph, config):
                 
             # Get all transactions for this card
             for _, tx in graph.out_edges(node):
-                tx_attrs = graph.nodes[tx]
+                tx_attrs = graph.nodes[tx].copy()  # Make a copy of the attributes
                 if tx_attrs.get('node_type') == 'transaction':
                     # Find the merchant for this transaction
                     merchant = None
@@ -60,10 +60,12 @@ def analyze_card_patterns(graph, config):
                         tx_attrs['merchant_id'] = merchant
                     card_transactions[card_id].append(tx_attrs)
 
-    # Analyze patterns
+    # Initialize statistics
     stats = {
         'bin_cards': {
             'total_cards': sum(len(cards) for cards in bin_cards.values()),
+            'total_transactions': 0,
+            'total_merchants': 0,
             'avg_txs_per_card': 0,
             'avg_amount': 0,
             'chargeback_rate': 0,
@@ -71,6 +73,8 @@ def analyze_card_patterns(graph, config):
         },
         'normal_cards': {
             'total_cards': len(normal_cards),
+            'total_transactions': 0,
+            'total_merchants': 0,
             'avg_txs_per_card': 0,
             'avg_amount': 0,
             'chargeback_rate': 0,
@@ -78,8 +82,15 @@ def analyze_card_patterns(graph, config):
         }
     }
     
+    # Debug print
+    print("\nDEBUG - BIN Attack Cards:")
+    print(f"Number of BIN cards: {stats['bin_cards']['total_cards']}")
+    
     # Analyze BIN attack cards
+    all_bin_merchants = set()
+    total_bin_txs = 0
     for prefix, cards in bin_cards.items():
+        print(f"\nPrefix {prefix}:")
         for card in cards:
             txs = card_transactions[card]
             if not txs:
@@ -94,14 +105,48 @@ def analyze_card_patterns(graph, config):
                 
             # Calculate metrics
             amounts = [tx['amount'] for tx in original_txs]
-            merchants = set(tx.get('merchant_id') for tx in original_txs if 'merchant_id' in tx)
+            card_merchants = set(tx.get('merchant_id') for tx in original_txs if 'merchant_id' in tx)
+            
+            # Debug print per card
+            print(f"  Card {card}: {len(original_txs)} txs, {len(card_merchants)} merchants")
+            
+            total_bin_txs += len(original_txs)
+            all_bin_merchants.update(card_merchants)
             
             stats['bin_cards']['avg_txs_per_card'] += len(original_txs)
             stats['bin_cards']['avg_amount'] += sum(amounts)
             stats['bin_cards']['chargeback_rate'] += len(chargeback_txs) / len(original_txs)
-            stats['bin_cards']['merchant_reuse'] += (len(original_txs) - len(merchants)) / len(original_txs) if len(original_txs) > 0 else 0
+    
+    # Calculate merchant reuse for BIN cards
+    print(f"\nTotal BIN transactions: {total_bin_txs}")
+    print(f"Total unique BIN merchants: {len(all_bin_merchants)}")
+    
+    if total_bin_txs > 0:
+        # Calculate merchant reuse rate per pattern
+        pattern_reuse_rates = []
+        for prefix, cards in bin_cards.items():
+            pattern_txs = 0
+            pattern_merchants = set()
+            for card in cards:
+                txs = [tx for tx in card_transactions[card] if not tx.get('is_chargeback', False)]
+                pattern_txs += len(txs)
+                pattern_merchants.update(tx.get('merchant_id') for tx in txs if 'merchant_id' in tx)
+            
+            if pattern_txs > 0:
+                reuse_rate = (pattern_txs - len(pattern_merchants)) / pattern_txs
+                pattern_reuse_rates.append(reuse_rate)
+        
+        # Average reuse rate across all patterns
+        stats['bin_cards']['merchant_reuse'] = sum(pattern_reuse_rates) / len(pattern_reuse_rates) if pattern_reuse_rates else 0
+        print(f"Calculated BIN merchant reuse rate: {stats['bin_cards']['merchant_reuse']:.3f} ({stats['bin_cards']['merchant_reuse']*100:.1f}%)")
+    
+    # Debug print
+    print("\nDEBUG - Normal Cards:")
+    print(f"Number of normal cards: {stats['normal_cards']['total_cards']}")
     
     # Analyze normal cards
+    all_normal_merchants = set()
+    total_normal_txs = 0
     for card in normal_cards:
         txs = card_transactions[card]
         if not txs:
@@ -116,12 +161,23 @@ def analyze_card_patterns(graph, config):
             
         # Calculate metrics
         amounts = [tx['amount'] for tx in original_txs]
-        merchants = set(tx.get('merchant_id') for tx in original_txs if 'merchant_id' in tx)
+        card_merchants = set(tx.get('merchant_id') for tx in original_txs if 'merchant_id' in tx)
+        
+        total_normal_txs += len(original_txs)
+        all_normal_merchants.update(card_merchants)
         
         stats['normal_cards']['avg_txs_per_card'] += len(original_txs)
         stats['normal_cards']['avg_amount'] += sum(amounts)
         stats['normal_cards']['chargeback_rate'] += len(chargeback_txs) / len(original_txs)
-        stats['normal_cards']['merchant_reuse'] += (len(original_txs) - len(merchants)) / len(original_txs) if len(original_txs) > 0 else 0
+    
+    # Calculate merchant reuse for normal cards
+    print(f"\nTotal normal transactions: {total_normal_txs}")
+    print(f"Total unique normal merchants: {len(all_normal_merchants)}")
+    
+    if total_normal_txs > 0:
+        reuse_rate = (total_normal_txs - len(all_normal_merchants)) / total_normal_txs
+        stats['normal_cards']['merchant_reuse'] = reuse_rate
+        print(f"Calculated normal merchant reuse rate: {reuse_rate:.3f} ({reuse_rate*100:.1f}%)")
     
     # Calculate averages
     for card_type in ['bin_cards', 'normal_cards']:
@@ -130,14 +186,13 @@ def analyze_card_patterns(graph, config):
             stats[card_type]['avg_txs_per_card'] /= total_cards
             stats[card_type]['avg_amount'] /= total_cards
             stats[card_type]['chargeback_rate'] /= total_cards
-            stats[card_type]['merchant_reuse'] /= total_cards
     
     return stats, bin_cards
 
 def plot_comparison(stats, config):
     """Create comparison plots between BIN attack cards and normal cards."""
-    # Create figure with three subplots
-    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(15, 5))
+    # Create figure with four subplots
+    fig, (ax1, ax2, ax3, ax4) = plt.subplots(1, 4, figsize=(20, 5))
     fig.suptitle('BIN Attack Cards vs Normal Cards Comparison', fontsize=16, y=1.05)
     
     # Common labels
@@ -178,6 +233,25 @@ def plot_comparison(stats, config):
     for bar in bars3:
         height = bar.get_height()
         ax3.text(bar.get_x() + bar.get_width()/2., height,
+                f'{height:.1f}%',
+                ha='center', va='bottom')
+    
+    # Plot 4: Merchant Reuse Rate vs Configuration
+    merchant_reuse = [stats['bin_cards']['merchant_reuse'] * 100, stats['normal_cards']['merchant_reuse'] * 100]
+    bars4 = ax4.bar(labels, merchant_reuse)
+    ax4.set_title('Merchant Reuse Rate')
+    ax4.set_ylabel('Percentage')
+    ax4.grid(True, alpha=0.3)
+    
+    # Add target line from configuration
+    target_reuse = config['fraud_patterns']['bin_attack']['merchant_reuse_prob'] * 100
+    ax4.axhline(y=target_reuse, color='r', linestyle='--', label=f'Target ({target_reuse:.0f}%)')
+    ax4.legend()
+    
+    # Add value labels
+    for bar in bars4:
+        height = bar.get_height()
+        ax4.text(bar.get_x() + bar.get_width()/2., height,
                 f'{height:.1f}%',
                 ha='center', va='bottom')
     
