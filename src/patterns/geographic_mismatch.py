@@ -4,6 +4,7 @@ import uuid
 from typing import Dict, Any, List, Set, Tuple
 import networkx as nx
 import logging
+from faker import Faker
 from .base_pattern import BasePattern
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,29 @@ class GeographicMismatchPattern(BasePattern):
         'oceania': ['210.0.0.0/8', '211.0.0.0/8']
     }
     
+    def __init__(self, config: Dict[str, Any], seed: int = None):
+        super().__init__(config, seed)
+        
+        # Create cached Faker instances for performance
+        self._faker_cache = {}
+        locale_map = {
+            'US': 'en_US', 'CA': 'en_CA', 
+            'NL': 'nl_NL', 'DE': 'de_DE', 'FR': 'fr_FR', 
+            'GB': 'en_GB', 'IT': 'it_IT', 'ES': 'es_ES',
+            'JP': 'ja_JP', 
+            'BR': 'pt_BR', 'AU': 'en_AU'
+        }
+        
+        # Pre-create Faker instances for all supported locales
+        for country, locale in locale_map.items():
+            try:
+                self._faker_cache[country] = Faker(locale)
+            except:
+                self._faker_cache[country] = Faker('en_US')
+        
+        # Default faker for unsupported countries
+        self._default_faker = Faker('en_US')
+
     def inject(
         self,
         graph: nx.DiGraph,
@@ -69,7 +93,7 @@ class GeographicMismatchPattern(BasePattern):
             customer_id = str(uuid.uuid4())
             customer_data = self._generate_fraudster_data()
             
-            # Set customer to Netherlands as baseline (as mentioned in the description)
+            # Set customer to Netherlands as baseline
             customer_data['country'] = 'NL'
             customer_data['city'] = 'Amsterdam'
             customer_data['state'] = 'North Holland'
@@ -301,27 +325,11 @@ class GeographicMismatchPattern(BasePattern):
     
     def _generate_address_for_region(self, region: str) -> Dict[str, Any]:
         """Generate a realistic address for a specific geographic region."""
-        from faker import Faker
-        
         countries = self.GEOGRAPHIC_REGIONS[region]
         country = random.choice(countries)
         
-        # Set faker locale based on country for more realistic data
-        # Using only well-supported locales
-        locale_map = {
-            'US': 'en_US', 'CA': 'en_CA', 
-            'NL': 'nl_NL', 'DE': 'de_DE', 'FR': 'fr_FR', 
-            'GB': 'en_GB', 'IT': 'it_IT', 'ES': 'es_ES',
-            'JP': 'ja_JP', 
-            'BR': 'pt_BR', 'AU': 'en_AU'
-        }
-        
-        locale = locale_map.get(country, 'en_US')
-        try:
-            fake_local = Faker(locale)
-        except AttributeError:
-            # Fallback to default if locale not supported
-            fake_local = Faker('en_US')
+        # Use cached Faker instance for better performance
+        fake_local = self._faker_cache.get(country, self._default_faker)
         
         try:
             state = fake_local.state() if country in ['US', 'CA', 'AU'] else fake_local.city()
