@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Dict, Any
+from typing import Dict, Any, List
 import networkx as nx
 from faker import Faker
 import random
@@ -49,6 +49,82 @@ class BasePattern(ABC):
         ip_int = random.randint(start, end)
         return str(ipaddress.IPv4Address(ip_int))
     
+    def _select_merchants(
+        self, 
+        num_transactions: int, 
+        merchants: Dict[str, Any],
+        reuse_probability: float
+    ) -> List[str]:
+        """
+        Select merchants for transactions with given reuse probability.
+        
+        Args:
+            num_transactions: Number of merchants to select
+            merchants: Dictionary of available merchants
+            reuse_probability: Probability of reusing the previous merchant
+            
+        Returns:
+            List of merchant IDs
+        """
+        merchant_ids = list(merchants.keys())
+        if not merchant_ids:
+            raise ValueError("No merchants available")
+            
+        merchant_sequence = []
+        
+        # First transaction: randomly select a merchant
+        current_merchant = random.choice(merchant_ids)
+        merchant_sequence.append(current_merchant)
+        
+        # For each subsequent transaction
+        for _ in range(num_transactions - 1):
+            if random.random() < reuse_probability:
+                # Reuse the same merchant as previous transaction
+                merchant_sequence.append(current_merchant)
+            else:
+                # Select a new random merchant
+                new_merchant = random.choice(merchant_ids)
+                while new_merchant == current_merchant and len(merchant_ids) > 1:
+                    new_merchant = random.choice(merchant_ids)
+                # Update current merchant to the new one
+                current_merchant = new_merchant
+                merchant_sequence.append(current_merchant)
+        
+        return merchant_sequence
+    
+    def _select_single_merchant(
+        self,
+        merchants: Dict[str, Any],
+        reuse_probability: float,
+        previous_merchant: str = None,
+        used_merchants: set = None
+    ) -> str:
+        """
+        Select a single merchant with reuse consideration.
+        
+        Args:
+            merchants: Dictionary of available merchants
+            previous_merchant: Previously used merchant ID
+            used_merchants: Set of already used merchants in this pattern
+            reuse_probability: Probability of reusing the previous merchant
+            
+        Returns:
+            Selected merchant ID
+        """
+        merchant_ids = list(merchants.keys())
+        if not merchant_ids:
+            raise ValueError("No merchants available")
+            
+        if used_merchants is None:
+            used_merchants = set()
+            
+        # If we have a previous merchant and should reuse with given probability
+        if previous_merchant and random.random() < reuse_probability:
+            return previous_merchant
+        
+        # Select a new merchant
+        return random.choice(merchant_ids)
+
     @abstractmethod
     def inject(self, graph: nx.MultiDiGraph, **kwargs) -> nx.MultiDiGraph:
         """

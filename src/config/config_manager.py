@@ -4,7 +4,6 @@ from datetime import datetime
 from typing import Dict, Any
 import logging
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class ConfigurationManager:
@@ -44,8 +43,6 @@ class ConfigurationManager:
         
         if 'fraud_patterns' in self.config:
             self._validate_fraud_patterns()
-        
-        self._validate_probability_distributions()
         
         required_sections = {'population', 'transactions', 'fraud_patterns'}
         missing_sections = required_sections - set(self.config.keys())
@@ -110,10 +107,11 @@ class ConfigurationManager:
         total = (
             distribution.get('bin_attack', 0) + 
             distribution.get('serial_chargeback', 0) + 
-            distribution.get('friendly_fraud', 0)
+            distribution.get('friendly_fraud', 0) + 
+            distribution.get('geographic_mismatch', 0)
         )
         if abs(total - 1.0) > 1e-8:
-            raise ValueError("Pattern distribution must sum to 1.0 (bin_attack + serial_chargeback + friendly_fraud)")
+            raise ValueError("Pattern distribution must sum to 1.0 (bin_attack + serial_chargeback + friendly_fraud + geographic_mismatch)")
             
         # Validate BIN Attack settings
         bin_attack = patterns.get('bin_attack', {})
@@ -145,9 +143,9 @@ class ConfigurationManager:
         if not 0 <= bin_attack.get('merchant_reuse_prob', 0) <= 1:
             raise ValueError("bin_attack.merchant_reuse_prob must be between 0 and 1")
             
-        # Validate chargeback rate
-        if not 0 <= bin_attack.get('chargeback_rate', 0) <= 1:
-            raise ValueError("bin_attack.chargeback_rate must be between 0 and 1")
+        # Validate chargeback probability
+        if not 0 <= bin_attack.get('chargeback_probability', 0) <= 1:
+            raise ValueError("bin_attack.chargeback_probability must be between 0 and 1")
             
         # Validate chargeback delay
         delay = bin_attack.get('chargeback_delay', {})
@@ -216,11 +214,39 @@ class ConfigurationManager:
         # Validate merchant reuse probability
         if not 0 <= friendly_fraud.get('merchant_reuse_prob', 0) <= 1:
             raise ValueError("friendly_fraud.merchant_reuse_prob must be between 0 and 1")
+            
+        # Validate Geographic Mismatch settings
+        geographic_mismatch = patterns.get('geographic_mismatch', {})
+        
+        # Validate number of transactions range
+        num_transactions = geographic_mismatch.get('num_transactions', {})
+        if not (0 < num_transactions.get('min', 0) <= num_transactions.get('max', 0)):
+            raise ValueError("Invalid num_transactions range in geographic_mismatch")
+            
+        # Validate time window range
+        time_window = geographic_mismatch.get('time_window', {})
+        if not (0 < time_window.get('min', 0) <= time_window.get('max', 0)):
+            raise ValueError("Invalid time_window range in geographic_mismatch")
+            
+        # Validate transaction amount range
+        amount = geographic_mismatch.get('transaction_amount', {})
+        if not (0 < amount.get('min', 0) <= amount.get('max', 0)):
+            raise ValueError("Invalid transaction_amount range in geographic_mismatch")
+            
+        # Validate merchant reuse probability
+        if not 0 <= geographic_mismatch.get('merchant_reuse_prob', 0) <= 1:
+            raise ValueError("geographic_mismatch.merchant_reuse_prob must be between 0 and 1")
+            
+        # Validate chargeback probability
+        if not 0 <= geographic_mismatch.get('chargeback_probability', 0) <= 1:
+            raise ValueError("geographic_mismatch.chargeback_probability must be between 0 and 1")
+            
+        # Validate chargeback delay range
+        delay = geographic_mismatch.get('chargeback_delay', {})
+        if not (0 < delay.get('min', 0) <= delay.get('max', 0)):
+            raise ValueError("Invalid chargeback_delay range in geographic_mismatch")
     
-    def _validate_probability_distributions(self) -> None:
-        """Validate that all probability distributions sum to 1."""
-        # This is a placeholder for additional probability distribution validations
-        pass
+
     
     def get_config(self) -> Dict[str, Any]:
         """

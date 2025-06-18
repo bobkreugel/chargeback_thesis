@@ -41,9 +41,6 @@ class FriendlyFraudPattern(BasePattern):
             
         logger.info(f"Generating {num_patterns} friendly fraud patterns")
         
-        # Create copy of graph to modify
-        graph = graph.copy()
-        
         # Generate patterns
         for pattern_idx in range(num_patterns):
             # Create customer with realistic data (appears legitimate initially)
@@ -141,7 +138,9 @@ class FriendlyFraudPattern(BasePattern):
             
             for i, transaction_time in enumerate(legitimate_transaction_times):
                 # Select merchant (with proper reuse tracking)
-                merchant_id = self._select_merchant(merchants, previous_merchant, used_merchants)
+                merchant_id = super()._select_single_merchant(
+                    merchants, self.config['merchant_reuse_prob'], previous_merchant, used_merchants
+                )
                 used_merchants.add(merchant_id)  # Track this merchant as used
                 previous_merchant = merchant_id
                 
@@ -198,7 +197,9 @@ class FriendlyFraudPattern(BasePattern):
             
             for _ in range(num_fraudulent):
                 # Select merchant (with proper reuse tracking)
-                merchant_id = self._select_merchant(merchants, previous_merchant, used_merchants)
+                merchant_id = super()._select_single_merchant(
+                    merchants, self.config['merchant_reuse_prob'], previous_merchant, used_merchants
+                )
                 used_merchants.add(merchant_id)  # Track this merchant as used
                 previous_merchant = merchant_id
                 
@@ -298,39 +299,4 @@ class FriendlyFraudPattern(BasePattern):
         
         return graph
     
-    def _select_merchant(
-        self,
-        merchants: Dict[str, Dict[str, Any]],
-        previous_merchant: str = None,
-        used_merchants: Set[str] = None
-    ) -> str:
-        """
-        Select een merchant voor een transactie, met strikte merchant_reuse_prob:
 
-        - Met kans merchant_reuse_prob: kies **exact** previous_merchant (indien beschikbaar)
-        - Anders: kies willekeurig uit alle beschikbare merchants
-        """
-        merchant_ids = list(merchants.keys())
-
-        # Als er maar één merchant beschikbaar is, retourneer die altijd
-        if len(merchant_ids) == 1:
-            return merchant_ids[0]
-
-        # Als dit de allereerste transactie is (geen previous_merchant), kies willekeurig
-        if previous_merchant is None:
-            return random.choice(merchant_ids)
-
-        # Bepaal of we de previous_merchant hergebruiken volgens configuratie
-        reuse_chance = self.config['merchant_reuse_prob']
-        if random.random() < reuse_chance:
-            # Hergebruik de previous merchant
-            return previous_merchant
-        else:
-            # Kies een andere merchant (kan ook een eerder gebruikte zijn)
-            # Dit zorgt voor meer realistische merchant diversiteit
-            available_merchants = [m for m in merchant_ids if m != previous_merchant]
-            if available_merchants:
-                return random.choice(available_merchants)
-            else:
-                # Fallback (zou niet moeten gebeuren met meer dan 1 merchant)
-                return previous_merchant

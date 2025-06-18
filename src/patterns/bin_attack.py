@@ -38,9 +38,6 @@ class BINAttackPattern(BasePattern):
         """
         logger.info(f"Generating {num_patterns} BIN attack patterns")
         
-        # Create copy of graph to modify
-        graph = graph.copy()
-        
         # Generate patterns
         for _ in range(num_patterns):
             # Create fraudulent customer with realistic data
@@ -94,7 +91,9 @@ class BINAttackPattern(BasePattern):
                 card_ids.append(card_id)
             
             # Select merchants based on reuse probability
-            merchant_sequence = self._select_merchants(num_cards, merchants)
+            merchant_sequence = super()._select_merchants(
+                num_cards, merchants, self.config['merchant_reuse_prob']
+            )
             
             # Generate transactions within time window
             pattern_start = random.randint(0, int((end_date - start_date).total_seconds()))
@@ -139,7 +138,7 @@ class BINAttackPattern(BasePattern):
                 graph.add_edge(merchant_id, transaction_id, edge_type='merchant_to_transaction')
                 
                 # Add chargeback with configured probability
-                if random.random() < self.config['chargeback_rate']:
+                if random.random() < self.config['chargeback_probability']:
                     delay = random.randint(
                         self.config['chargeback_delay']['min'],
                         self.config['chargeback_delay']['max']
@@ -164,35 +163,4 @@ class BINAttackPattern(BasePattern):
         
         return graph 
 
-    def _select_merchants(
-        self,
-        num_transactions: int,
-        merchants: Dict[str, Dict[str, Any]]
-    ) -> List[str]:
-        """
-        Select merchants for transactions with given reuse rate.
-        For each transaction after the first:
-        - With probability merchant_reuse_prob: use the same merchant as previous transaction
-        - With probability (1 - merchant_reuse_prob): select a new random merchant
-        """
-        merchant_ids = list(merchants.keys())
-        merchant_sequence = []
-        
-        # First transaction: randomly select a merchant
-        current_merchant = random.choice(merchant_ids)
-        merchant_sequence.append(current_merchant)
-        
-        # For each subsequent transaction
-        for _ in range(num_transactions - 1):
-            if random.random() < self.config['merchant_reuse_prob']:
-                # Reuse the same merchant as previous transaction
-                merchant_sequence.append(current_merchant)
-            else:
-                # Select a new random merchant
-                new_merchant = random.choice(merchant_ids)
-                while new_merchant == current_merchant and len(merchant_ids) > 1:
-                    new_merchant = random.choice(merchant_ids)
-                current_merchant = new_merchant
-                merchant_sequence.append(current_merchant)
-        
-        return merchant_sequence 
+ 

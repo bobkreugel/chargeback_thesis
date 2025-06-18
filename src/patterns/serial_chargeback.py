@@ -5,7 +5,6 @@ from typing import Dict, Any, List, Set
 import networkx as nx
 import logging
 from .base_pattern import BasePattern
-from collections import defaultdict
 
 logger = logging.getLogger(__name__)
 
@@ -65,31 +64,7 @@ class SerialChargebackPattern(BasePattern):
         
         return timestamps
     
-    def _select_merchants(
-        self,
-        num_transactions: int,
-        merchants: Dict[str, Dict[str, Any]],
-        reuse_rate: float
-    ) -> List[str]:
-        """
-        Select merchants for transactions with given reuse rate.
-        The reuse rate is calculated as: (total_transactions - unique_merchants) / total_transactions
-        Ensures proper merchant distribution and handles cases where requested unique merchants
-        exceeds available merchants.
-        """
-        merchant_ids = list(merchants.keys())
-        num_unique = max(1, round(num_transactions * (1 - reuse_rate)))
-        
-        
-        if num_unique > len(merchant_ids):
-            num_unique = len(merchant_ids)
-            
-        selected_merchants = random.sample(merchant_ids, num_unique)
-        merchant_sequence = selected_merchants * ((num_transactions // num_unique) + 1)
-        merchant_sequence = merchant_sequence[:num_transactions]
-        random.shuffle(merchant_sequence)
-        
-        return merchant_sequence
+
     
     def inject(
         self,
@@ -99,7 +74,8 @@ class SerialChargebackPattern(BasePattern):
         end_date: datetime,
         customers: Dict[str, Dict[str, Any]],
         customer_cards: Dict[str, Set[str]],
-        merchants: Dict[str, Dict[str, Any]]
+        merchants: Dict[str, Dict[str, Any]],
+        global_config: Dict[str, Any] = None
     ) -> nx.DiGraph:
         """
         Inject serial chargeback patterns into the transaction graph.
@@ -109,14 +85,20 @@ class SerialChargebackPattern(BasePattern):
         """
         logger.info(f"Generating {num_patterns} serial chargeback patterns")
         
-        # Create copy of graph to modify
-        graph = graph.copy()
-        
         # Get time window and chargeback delay from config
         window_min = self.config['time_window']['min']
         window_max = self.config['time_window']['max']
         cb_delay_min = self.config['chargeback_delay']['min']
         cb_delay_max = self.config['chargeback_delay']['max']
+        
+        # Get global transaction amount range from global config if provided
+        if global_config and 'transactions' in global_config:
+            global_amount_min = global_config['transactions']['amount']['min']
+            global_amount_max = global_config['transactions']['amount']['max']
+        else:
+            # Fallback to reasonable defaults if global config not available
+            global_amount_min = 10.00
+            global_amount_max = 500.00
         
         # Generate patterns
         for _ in range(num_patterns):
@@ -143,14 +125,11 @@ class SerialChargebackPattern(BasePattern):
             )
             graph.add_edge(customer_id, card_id, edge_type='customer_to_card')
             
-            # Calculate number of fraudulent transactions (these will get chargebacks)
-            num_fraud_transactions = random.randint(
+            # Calculate number of transactions in pattern (all will be fraudulent and get chargebacks)
+            num_transactions = random.randint(
                 self.config['transactions_in_pattern']['min'],
                 self.config['transactions_in_pattern']['max']
             )
-            
-            # Add 2-3 normal transactions that won't get chargebacks
-            num_normal_transactions = random.randint(2, 3)
             
             # Calculate pattern start time, ensuring enough room for chargebacks
             max_delay = cb_delay_max + window_max  # Maximum days needed for pattern + chargebacks
@@ -162,23 +141,22 @@ class SerialChargebackPattern(BasePattern):
             pattern_start = start_date + timedelta(seconds=pattern_start)
             
             # Select merchants for all transactions
-            total_transactions = num_fraud_transactions + num_normal_transactions
-            merchant_sequence = self._select_merchants(
-                total_transactions,
+            merchant_sequence = super()._select_merchants(
+                num_transactions,
                 merchants,
                 self.config['merchant_reuse_prob']
             )
             
             # Generate timestamps for all transactions
-            timestamps = self._distribute_timestamps(total_transactions, pattern_start, window_max)
+            timestamps = self._distribute_timestamps(num_transactions, pattern_start, window_max)
             
-            # Create fraudulent transactions (these will get chargebacks)
-            for i in range(num_fraud_transactions):
+            # Create all transactions as fraudulent (all will get chargebacks)
+            for i in range(num_transactions):
                 timestamp = timestamps[i]
                 merchant_id = merchant_sequence[i]
                 
-                # Generate transaction amount
-                amount = round(random.uniform(10.00, 100.00), 2)  # Lower amounts for fraud
+                # Generate transaction amount using global configuration range
+                amount = round(random.uniform(global_amount_min, global_amount_max), 2)
                 
                 # Create transaction
                 tx_id = str(uuid.uuid4())
@@ -196,50 +174,27 @@ class SerialChargebackPattern(BasePattern):
                 graph.add_edge(card_id, tx_id, edge_type='card_to_transaction')
                 graph.add_edge(merchant_id, tx_id, edge_type='merchant_to_transaction')
                 
-                # Generate chargeback after delay
-                cb_delay = random.randint(cb_delay_min, cb_delay_max)
-                cb_timestamp = timestamp + timedelta(days=cb_delay)
-                
-                # Create chargeback transaction
-                cb_id = str(uuid.uuid4())
-                graph.add_node(
-                    cb_id,
-                    node_type='transaction',
-                    timestamp=cb_timestamp,
-                    amount=amount,
-                    is_fraudulent=True,
-                    is_chargeback=True,
-                    original_transaction=tx_id,
-                    chargeback_reason="Fraudulent Transaction",
-                    customer_id=customer_id
-                )
-                
-                # Add edges (same as original transaction)
-                graph.add_edge(card_id, cb_id, edge_type='card_to_transaction')
-                graph.add_edge(merchant_id, cb_id, edge_type='merchant_to_transaction')
-            
-            # Create normal transactions (these won't get chargebacks)
-            for i in range(num_fraud_transactions, total_transactions):
-                timestamp = timestamps[i]
-                merchant_id = merchant_sequence[i]
-                
-                # Generate transaction amount (higher amounts for normal transactions)
-                amount = round(random.uniform(50.00, 500.00), 2)
-                
-                # Create transaction
-                tx_id = str(uuid.uuid4())
-                graph.add_node(
-                    tx_id,
-                    node_type='transaction',
-                    timestamp=timestamp,
-                    amount=amount,
-                    is_fraudulent=False,
-                    is_chargeback=False,
-                    customer_id=customer_id
-                )
-                
-                # Add edges
-                graph.add_edge(card_id, tx_id, edge_type='card_to_transaction')
-                graph.add_edge(merchant_id, tx_id, edge_type='merchant_to_transaction')
+                # Generate chargeback based on probability (not 100% anymore)
+                if random.random() < self.config.get('chargeback_probability', 1.0):
+                    cb_delay = random.randint(cb_delay_min, cb_delay_max)
+                    cb_timestamp = timestamp + timedelta(days=cb_delay)
+                    
+                    # Create chargeback transaction
+                    cb_id = str(uuid.uuid4())
+                    graph.add_node(
+                        cb_id,
+                        node_type='transaction',
+                        timestamp=cb_timestamp,
+                        amount=amount,
+                        is_fraudulent=True,
+                        is_chargeback=True,
+                        original_transaction=tx_id,
+                        chargeback_reason="Fraudulent Transaction",
+                        customer_id=customer_id
+                    )
+                    
+                    # Add edges (same as original transaction)
+                    graph.add_edge(card_id, cb_id, edge_type='card_to_transaction')
+                    graph.add_edge(merchant_id, cb_id, edge_type='merchant_to_transaction')
         
         return graph 

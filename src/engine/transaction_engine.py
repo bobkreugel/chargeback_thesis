@@ -5,18 +5,15 @@ import random
 import uuid
 from typing import Dict, List, Tuple, Any
 import logging
-import pandas as pd
 import os
-import time
 from src.config.config_manager import ConfigurationManager
 from src.patterns.serial_chargeback import SerialChargebackPattern
 from src.patterns.bin_attack import BINAttackPattern
 from src.patterns.friendly_fraud import FriendlyFraudPattern
+from src.patterns.geographic_mismatch import GeographicMismatchPattern
 from collections import defaultdict
-import sys
 import csv
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class TransactionEngine:
@@ -41,6 +38,11 @@ class TransactionEngine:
         self.merchants = {}  # merchant_id -> merchant data
         self.cards = {}  # card_id -> customer_id mapping
         self.customer_cards = defaultdict(set)  # customer_id -> set of card_ids
+        
+        # Performance optimization: Cache lists for random selection
+        self._customer_list = []  # Cached list of customer IDs
+        self._merchant_list = []  # Cached list of merchant IDs
+        self._lists_need_update = True  # Flag to track if lists need refresh
         
         # Initialize random seeds if provided
         self.seed = seed
@@ -202,6 +204,41 @@ class TransactionEngine:
             )
         
         logger.info(f"Generated {num_customers} customers, {num_merchants} merchants, and {len(self.cards)} cards")
+        
+        # Update cached lists for efficient random selection
+        self._lists_need_update = True
+        self._update_cached_lists()
+    
+    def _update_cached_lists(self) -> None:
+        """Update cached lists for efficient random selection."""
+        if self._lists_need_update:
+            self._customer_list = list(self.customers.keys())
+            self._merchant_list = list(self.merchants.keys())
+            self._lists_need_update = False
+    
+    def _update_pattern_counts(self) -> None:
+        """Update cached pattern transaction counts by scanning the graph."""
+        if not hasattr(self, '_pattern_counts'):
+            self._pattern_counts = {
+                'serial_chargeback': 0,
+                'bin_attack': 0,
+                'friendly_fraud': 0,
+                'geographic_mismatch': 0
+            }
+        
+        # Reset counts
+        for pattern_type in self._pattern_counts:
+            self._pattern_counts[pattern_type] = 0
+        
+        # Count transactions for each pattern type
+        for node, attr in self.graph.nodes(data=True):
+            if (attr.get('node_type') == 'transaction' and 
+                not attr.get('is_chargeback', False) and  # Only count original transactions
+                attr.get('customer_id')):
+                customer = self.graph.nodes[attr['customer_id']]
+                fraud_type = customer.get('fraud_type')
+                if fraud_type in self._pattern_counts:
+                    self._pattern_counts[fraud_type] += 1
     
     def generate_normal_transactions(self) -> None:
         """Generate normal (non-fraudulent) transactions."""
@@ -219,10 +256,13 @@ class TransactionEngine:
         
         logger.info(f"Generating {normal_transactions} normal transactions...")
         
+        # Ensure cached lists are up to date
+        self._update_cached_lists()
+        
         transactions_generated = 0
         while transactions_generated < normal_transactions:
-            # Select random customer and their card
-            customer_id = random.choice(list(self.customers))
+            # Select random customer and their card (using cached lists for O(1) performance)
+            customer_id = random.choice(self._customer_list)
             
             # Skip fraudulent customers
             if self.graph.nodes[customer_id].get('is_fraudster', False):
@@ -230,8 +270,8 @@ class TransactionEngine:
                 
             card_id = random.choice(list(self.customer_cards[customer_id]))
             
-            # Select random merchant
-            merchant_id = random.choice(list(self.merchants))
+            # Select random merchant (using cached list for O(1) performance)
+            merchant_id = random.choice(self._merchant_list)
             
             # Generate random amount
             amount = round(random.uniform(amount_range['min'], amount_range['max']), 2)
@@ -258,6 +298,8 @@ class TransactionEngine:
     
     def _refresh_internal_mappings(self) -> None:
         """Update internal customer and card mappings with new nodes from the graph."""
+        updated = False
+        
         for node, attr in self.graph.nodes(data=True):
             if attr.get('node_type') == 'customer' and node not in self.customers:
                 # Add new customer data (without is_fraudster flag in dictionary)
@@ -272,6 +314,7 @@ class TransactionEngine:
                     'risk_score': attr.get('risk_score', 0)
                 }
                 self.customers[node] = customer_data
+                updated = True
                 
                 # Keep is_fraudster in graph node
                 if attr.get('is_fraudster'):
@@ -284,6 +327,11 @@ class TransactionEngine:
                     customer_id = customer_edges[0][0]
                     self.cards[node] = customer_id
                     self.customer_cards[customer_id].add(node)
+        
+        # Update cached lists if any new customers or merchants were added
+        if updated:
+            self._lists_need_update = True
+            self._update_cached_lists()
 
     def _inject_patterns(self) -> None:
         """Inject configured fraud patterns into the transaction graph."""
@@ -301,11 +349,13 @@ class TransactionEngine:
         target_serial_cb = int(target_fraud * pattern_dist['serial_chargeback'])
         target_bin_attacks = int(target_fraud * pattern_dist['bin_attack'])
         target_friendly_fraud = int(target_fraud * pattern_dist['friendly_fraud'])
+        target_geographic_mismatch = int(target_fraud * pattern_dist['geographic_mismatch'])
         
         # Initialize pattern generators with same seed if one was provided
         serial_cb_pattern = SerialChargebackPattern(fraud_config['serial_chargeback'], seed=self.seed)
         bin_attack_pattern = BINAttackPattern(fraud_config['bin_attack'], seed=self.seed)
         friendly_fraud_pattern = FriendlyFraudPattern(fraud_config['friendly_fraud'], seed=self.seed)
+        geographic_mismatch_pattern = GeographicMismatchPattern(fraud_config['geographic_mismatch'], seed=self.seed)
         
         # Get date range from config
         trans_config = self.config.get_section('transactions')
@@ -313,21 +363,24 @@ class TransactionEngine:
         start_date = datetime.strptime(date_range['start'], '%Y-%m-%d')
         end_date = datetime.strptime(date_range['end'], '%Y-%m-%d')
         
+        # Performance optimization: Keep track of pattern transaction counts
+        if not hasattr(self, '_pattern_counts'):
+            self._pattern_counts = {
+                'serial_chargeback': 0,
+                'bin_attack': 0,
+                'friendly_fraud': 0,
+                'geographic_mismatch': 0
+            }
+        
         def count_pattern_transactions(pattern_type: str) -> int:
-            """Count actual transactions for a specific pattern type."""
-            count = 0
-            for node, attr in self.graph.nodes(data=True):
-                if (attr.get('node_type') == 'transaction' and 
-                    not attr.get('is_chargeback', False) and  # Only count original transactions
-                    attr.get('customer_id')):
-                    customer = self.graph.nodes[attr['customer_id']]
-                    if customer.get('fraud_type') == pattern_type:
-                        count += 1
-            return count
+            """Count actual transactions for a specific pattern type using cached counts."""
+            return self._pattern_counts.get(pattern_type, 0)
         
         # Adaptive pattern generation with continuous monitoring
         def generate_patterns(pattern_obj, pattern_type: str, target_txs: int, max_attempts: int = 10) -> int:
             """Generate patterns and return actual number of transactions created."""
+            # Update pattern counts first
+            self._update_pattern_counts()
             actual_txs = count_pattern_transactions(pattern_type)
             attempt = 0
             
@@ -342,9 +395,12 @@ class TransactionEngine:
                 elif pattern_type == 'bin_attack':
                     avg_txs = (fraud_config['bin_attack']['num_cards']['min'] +
                               fraud_config['bin_attack']['num_cards']['max']) / 2
-                else:  # friendly_fraud
+                elif pattern_type == 'friendly_fraud':
                     avg_txs = (fraud_config['friendly_fraud']['fraudulent_transactions']['min'] +
                               fraud_config['friendly_fraud']['fraudulent_transactions']['max']) / 2
+                else:  # geographic_mismatch
+                    avg_txs = (fraud_config['geographic_mismatch']['num_transactions']['min'] +
+                              fraud_config['geographic_mismatch']['num_transactions']['max']) / 2
                 
                 # Calculate number of patterns needed
                 current_patterns = sum(1 for n, a in self.graph.nodes(data=True) 
@@ -364,20 +420,35 @@ class TransactionEngine:
                     num_patterns = max(1, int(remaining / avg_txs * 0.5))  # Start with 50% of estimated
                 
                 # Generate patterns
-                self.graph = pattern_obj.inject(
-                    self.graph,
-                    num_patterns,
-                    start_date,
-                    end_date,
-                    self.customers,
-                    self.customer_cards,
-                    self.merchants
-                )
+                if pattern_type == 'serial_chargeback':
+                    # Pass global config to serial chargeback pattern for transaction amounts
+                    self.graph = pattern_obj.inject(
+                        self.graph,
+                        num_patterns,
+                        start_date,
+                        end_date,
+                        self.customers,
+                        self.customer_cards,
+                        self.merchants,
+                        global_config=self.config.config  # Pass the full config
+                    )
+                else:
+                    # Other patterns use their standard inject method
+                    self.graph = pattern_obj.inject(
+                        self.graph,
+                        num_patterns,
+                        start_date,
+                        end_date,
+                        self.customers,
+                        self.customer_cards,
+                        self.merchants
+                    )
                 
                 # Update internal mappings
                 self._refresh_internal_mappings()
                 
-                # Count actual transactions
+                # Update pattern counts and get actual transactions
+                self._update_pattern_counts()
                 new_actual_txs = count_pattern_transactions(pattern_type)
                 
                 # Check progress
@@ -388,9 +459,7 @@ class TransactionEngine:
                 logger.info(f"{pattern_type}: Generated {actual_txs} transactions (target: {target_txs})")
                 
                 # Calculate current distribution
-                total_current = (count_pattern_transactions('serial_chargeback') +
-                               count_pattern_transactions('bin_attack') +
-                               count_pattern_transactions('friendly_fraud'))
+                total_current = sum(self._pattern_counts.values())
                 
                 if total_current > 0:
                     current_dist = actual_txs / total_current
@@ -409,17 +478,19 @@ class TransactionEngine:
         actual_serial = generate_patterns(serial_cb_pattern, 'serial_chargeback', target_serial_cb)
         actual_bin = generate_patterns(bin_attack_pattern, 'bin_attack', target_bin_attacks)
         actual_friendly = generate_patterns(friendly_fraud_pattern, 'friendly_fraud', target_friendly_fraud)
+        actual_geographic = generate_patterns(geographic_mismatch_pattern, 'geographic_mismatch', target_geographic_mismatch)
         
         # Log final distribution
-        total_fraud_txs = actual_serial + actual_bin + actual_friendly
+        total_fraud_txs = actual_serial + actual_bin + actual_friendly + actual_geographic
         logger.info("\nFinal fraud transaction distribution:")
         logger.info(f"- Serial chargebacks: {actual_serial} ({actual_serial/total_fraud_txs*100:.1f}%)")
         logger.info(f"- BIN attacks: {actual_bin} ({actual_bin/total_fraud_txs*100:.1f}%)")
         logger.info(f"- Friendly fraud: {actual_friendly} ({actual_friendly/total_fraud_txs*100:.1f}%)")
+        logger.info(f"- Geographic mismatch: {actual_geographic} ({actual_geographic/total_fraud_txs*100:.1f}%)")
         
         logger.info("Completed fraud pattern injection")
     
-    def get_graph(self) -> nx.MultiDiGraph:
+    def get_graph(self) -> nx.DiGraph:
         """Return the generated transaction graph."""
         return self.graph
     

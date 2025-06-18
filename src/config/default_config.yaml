@@ -25,9 +25,10 @@ transactions:
 fraud_patterns:
   total_fraud_ratio: 0.1
   pattern_distribution:
-    serial_chargeback: 0.4
-    bin_attack: 0.4
-    friendly_fraud: 0.2
+    serial_chargeback: 0.1
+    bin_attack: 0.1
+    friendly_fraud: 0.1
+    geographic_mismatch: 0.7
 
   # Serial Chargeback Pattern settings
   serial_chargeback:
@@ -41,6 +42,8 @@ fraud_patterns:
       max: 15
     # Probability of reusing a merchant
     merchant_reuse_prob: 0.8
+    # Probability of a transaction becoming a chargeback
+    chargeback_probability: 0.8
     # Delay between transaction and chargeback (in days)
     chargeback_delay:
       min: 10
@@ -89,10 +92,6 @@ fraud_patterns:
     num_cards:
       min: 15
       max: 25
-    # Number of merchants to target
-    num_merchants:
-      min: 3
-      max: 7
     # Time window for pattern (in minutes)
     time_window:
       minutes: 60
@@ -102,9 +101,32 @@ fraud_patterns:
       max: 5.00
     # Probability of reusing a merchant
     merchant_reuse_prob: 0.7
-    # Percentage of transactions that result in chargebacks
-    chargeback_rate: 0.8
+    # Probability of a transaction becoming a chargeback
+    chargeback_probability: 0.8
     # Delay between transaction and chargeback (in days)
     chargeback_delay:
       min: 30
       max: 60
+
+  # Geographic Mismatch Pattern settings
+  geographic_mismatch:
+    # Number of transactions per pattern
+    num_transactions:
+      min: 2
+      max: 5
+    # Time window for pattern (in days)
+    time_window:
+      min: 1
+      max: 7
+    # Transaction amounts (moderate amounts for plausible purchases)
+    transaction_amount:
+      min: 50.00
+      max: 200.00
+    # Probability of reusing a merchant
+    merchant_reuse_prob: 0.3
+    # Probability of a transaction becoming a chargeback
+    chargeback_probability: 0.9
+    # Delay between transaction and chargeback (in days)
+    chargeback_delay:
+      min: 20
+      max: 45

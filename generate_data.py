@@ -57,7 +57,8 @@ def calculate_statistics(graph):
             'fraudulent': 0,
             'bin_attacks': 0,
             'serial_chargebacks': 0,
-            'friendly_fraud': 0
+            'friendly_fraud': 0,
+            'geographic_mismatch': 0
         }
     }
     
@@ -96,6 +97,8 @@ def calculate_statistics(graph):
                             stats['transactions']['serial_chargebacks'] += 1
                         elif fraud_type == 'friendly_fraud':
                             stats['transactions']['friendly_fraud'] += 1
+                        elif fraud_type == 'geographic_mismatch':
+                            stats['transactions']['geographic_mismatch'] += 1
                     else:
                         stats['transactions']['normal'] += 1
     
@@ -149,6 +152,7 @@ def main():
     logger.info(f"BIN Attacks: {stats['transactions']['bin_attacks']} ({stats['transactions']['bin_attacks']/stats['transactions']['fraudulent']*100:.1f}%)")
     logger.info(f"Serial Chargebacks: {stats['transactions']['serial_chargebacks']} ({stats['transactions']['serial_chargebacks']/stats['transactions']['fraudulent']*100:.1f}%)")
     logger.info(f"Friendly Fraud: {stats['transactions']['friendly_fraud']} ({stats['transactions']['friendly_fraud']/stats['transactions']['fraudulent']*100:.1f}%)")
+    logger.info(f"Geographic Mismatch: {stats['transactions']['geographic_mismatch']} ({stats['transactions']['geographic_mismatch']/stats['transactions']['fraudulent']*100:.1f}%)")
     
     # Export to CSV
     logger.info("\nExporting data to CSV...")
