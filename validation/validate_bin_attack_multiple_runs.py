@@ -209,7 +209,7 @@ def create_validation_plot(all_metrics, config):
     expected_cb_delay_max = config['fraud_patterns']['bin_attack']['chargeback_delay']['max']
     expected_bin_prefixes = config['fraud_patterns']['bin_attack']['bin_prefixes']
     
-    # Panel 1: Cards and Merchants per Pattern
+    # Panel 1: Cards per Pattern (Merchants are emergent, not configured)
     ax = axes[0, 0]
     all_cards = []
     all_merchants = []
@@ -222,12 +222,15 @@ def create_validation_plot(all_metrics, config):
     avg_merchants = [np.mean(m['merchants_per_pattern']) for m in all_metrics]
     
     ax.bar(x - 0.2, avg_cards, 0.4, label='Avg Cards', alpha=0.8, color='lightblue')
-    ax.bar(x + 0.2, avg_merchants, 0.4, label='Avg Merchants', alpha=0.8, color='salmon')
-    ax.axhline(expected_cards_min, color='blue', linestyle='--', alpha=0.7, label=f'Cards Min: {expected_cards_min}')
-    ax.axhline(expected_cards_max, color='blue', linestyle='--', alpha=0.7, label=f'Cards Max: {expected_cards_max}')
+    ax.bar(x + 0.2, avg_merchants, 0.4, label='Avg Merchants (emergent)', alpha=0.8, color='salmon')
+    
+    # Red reference lines for cards only (merchants are emergent from reuse probability)
+    ax.axhline(expected_cards_min, color='red', linestyle='--', alpha=0.8, linewidth=2, label=f'Cards Min: {expected_cards_min}')
+    ax.axhline(expected_cards_max, color='red', linestyle='--', alpha=0.8, linewidth=2, label=f'Cards Max: {expected_cards_max}')
+    
     ax.set_xlabel('Experiment Run')
     ax.set_ylabel('Average Count')
-    ax.set_title('Cards and Merchants per Pattern')
+    ax.set_title('Cards per Pattern (Merchants Emergent from Reuse)')
     ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
     ax.grid(True, alpha=0.3)
     
@@ -339,8 +342,9 @@ def create_validation_plot(all_metrics, config):
     print(f"  Expected: {expected_cards_min}-{expected_cards_max}")
     print(f"  Actual: {np.min(all_cards):.1f}-{np.max(all_cards):.1f} (avg: {np.mean(all_cards):.1f})")
     
-    print(f"\nMerchants per Pattern:")
+    print(f"\nMerchants per Pattern (emergent from reuse probability):")
     print(f"  Actual: {np.min(all_merchants):.1f}-{np.max(all_merchants):.1f} (avg: {np.mean(all_merchants):.1f})")
+    print(f"  Note: Number of merchants is determined by reuse_prob ({expected_merchant_reuse:.1%}) and random selection")
     
     print(f"\nPattern Duration:")
     print(f"  Expected: ≤ {expected_time_window} minutes")

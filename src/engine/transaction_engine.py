@@ -270,7 +270,7 @@ class TransactionEngine:
                 
             card_id = random.choice(list(self.customer_cards[customer_id]))
             
-            # Select random merchant (using cached list for O(1) performance)
+            # Select random merchant
             merchant_id = random.choice(self._merchant_list)
             
             # Generate random amount
